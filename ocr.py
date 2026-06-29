@@ -296,12 +296,50 @@ def extract_fields(text):
         amt = _search(r"[（(]写[)）][：:]?[¥￥]([0-9]+\.[0-9]{1,2})", norm)
     f["total_amount"] = amt
 
-    # 合计金额
-    f["amount"] = _search(r"合计[:：]?[¥￥]?([0-9]+\.[0-9]{1,2})", norm)
+    # 金额合计 + 税额合计：
+    # 发票金额区有三个¥数字（按出现顺序）：金额合计(不含税)、价税合计(带"小写")、税额合计。
+    # 以价税合计为锚，取其前一个¥数字=金额合计，后一个¥数字=税额合计。
+    f["amount"], f["tax_amount"] = _extract_amounts(norm, f.get("total_amount"))
+    # 兜底：若未取到金额合计，但有价税合计和税额，则 金额=价税合计-税额
+    if not f["amount"] and f["total_amount"] and f["tax_amount"]:
+        try:
+            f["amount"] = f"{float(f['total_amount']) - float(f['tax_amount']):.2f}"
+        except ValueError:
+            pass
 
     # 购买方 / 销售方名称：按"价税合计"分块，前块取购买方，后块取销售方
     f["buyer"], f["seller"] = _extract_parties(text, norm)
     return f
+
+
+def _extract_amounts(norm, total_amount):
+    """提取金额合计与税额合计。
+
+    以价税合计数字为锚：其前最近的¥数字=金额合计(不含税)，其后最近的¥数字=税额合计。
+    用去空白文本 norm 定位，避免换行干扰。
+    """
+    all_nums = list(re.finditer(r"[¥￥]([0-9]+\.[0-9]{1,2})", norm))
+    if not all_nums or not total_amount:
+        return None, None
+    # 找价税合计对应的匹配（值相等）
+    anchor = None
+    for m in all_nums:
+        if m.group(1) == total_amount:
+            anchor = m
+            break
+    if not anchor:
+        # 价税合计通常是这些数字里最大的
+        anchor = max(all_nums, key=lambda m: float(m.group(1)))
+    amount, tax = None, None
+    # 前一个 = 金额合计
+    before = [m for m in all_nums if m.start() < anchor.start()]
+    if before:
+        amount = before[-1].group(1)
+    # 后一个 = 税额合计
+    after = [m for m in all_nums if m.start() > anchor.start()]
+    if after:
+        tax = after[0].group(1)
+    return amount, tax
 
 
 def _extract_parties(text, norm):

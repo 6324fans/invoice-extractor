@@ -104,13 +104,14 @@ async function loadInvoices() {
       <td>${esc(it.seller) || '—'}</td>
       <td>${esc(it.buyer) || '—'}</td>
       <td class="amount">${it.total_amount ? '¥' + it.total_amount : '—'}</td>
+      <td class="amount">${fmtAmt(it.amount)} / ${fmtAmt(it.tax_amount)}</td>
       <td>${fmtTime(it.wechat_time)}</td>
       <td>${esc(it.invoice_type) || '—'}</td>
       <td><button class="del-btn" onclick="event.stopPropagation();deleteInv(${it.id}, this)">删除</button></td>`;
     tbody.appendChild(tr);
   });
   if (!d.items.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#999;padding:24px">暂无数据，请先按日期扫描</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#999;padding:24px">暂无数据，请先按日期扫描</td></tr>';
   }
 }
 
@@ -149,7 +150,8 @@ async function showDetail(id) {
         <dt>开票日期</dt><dd>${it.invoice_date || '—'}</dd>
         <dt>购买方</dt><dd>${esc(it.buyer) || '—'}</dd>
         <dt>销售方</dt><dd>${esc(it.seller) || '—'}</dd>
-        <dt>金额</dt><dd>${it.amount || '—'}</dd>
+        <dt>金额合计</dt><dd>${fmtAmt(it.amount)}</dd>
+        <dt>税额</dt><dd>${fmtAmt(it.tax_amount)}</dd>
         <dt>价税合计</dt><dd>${it.total_amount ? '¥' + it.total_amount : '—'}</dd>
         <dt>校验码</dt><dd>${it.check_code || '—'}</dd>
         <dt>机器编号</dt><dd>${it.machine_no || '—'}</dd>
@@ -168,5 +170,6 @@ function closeModal() { document.getElementById('modal').classList.remove('show'
 
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function fmtTime(s) { if (!s) return '—'; return s.replace('T', ' ').slice(0, 16); }
+function fmtAmt(s) { return s ? '¥' + s : '—'; }
 
 init();

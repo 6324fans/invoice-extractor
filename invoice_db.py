@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     buyer TEXT,
     seller TEXT,
     amount TEXT,
+    tax_amount TEXT,
     total_amount TEXT,
     check_code TEXT,
     machine_no TEXT,
@@ -52,11 +53,13 @@ def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
-    # 轻量迁移：旧库可能缺 invoice_date_iso 列
+    # 轻量迁移：旧库可能缺列
     cols = {r[1] for r in conn.execute("PRAGMA table_info(invoices)").fetchall()}
     if "invoice_date_iso" not in cols:
         conn.execute("ALTER TABLE invoices ADD COLUMN invoice_date_iso TEXT")
-        conn.commit()
+    if "tax_amount" not in cols:
+        conn.execute("ALTER TABLE invoices ADD COLUMN tax_amount TEXT")
+    conn.commit()
     return conn
 
 
@@ -88,15 +91,16 @@ def insert_invoice(conn, fields, source_path, source_kind, wechat_time, ocr_text
     cur = conn.execute(
         """INSERT INTO invoices(
             invoice_type, invoice_code, invoice_no, invoice_date, invoice_date_iso, buyer, seller,
-            amount, total_amount, check_code, machine_no, source_path, source_kind,
+            amount, tax_amount, total_amount, check_code, machine_no, source_path, source_kind,
             wechat_time, ocr_text, thumb_path, created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             fields.get("invoice_type"), fields.get("invoice_code"),
             fields.get("invoice_no"), fields.get("invoice_date"),
             fields.get("invoice_date_iso"),
             fields.get("buyer"), fields.get("seller"),
-            fields.get("amount"), fields.get("total_amount"),
+            fields.get("amount"), fields.get("tax_amount"),
+            fields.get("total_amount"),
             fields.get("check_code"), fields.get("machine_no"),
             source_path, source_kind,
             wechat_time.isoformat(timespec="seconds") if isinstance(wechat_time, datetime) else wechat_time,
