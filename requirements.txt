@@ -4,9 +4,9 @@ pywebview>=5.0
 Pillow>=10.0
 python-docx>=1.1
 pytesseract>=0.3.10
+PyMuPDF>=1.24
 
 # macOS 系统框架绑定（Vision OCR / Quartz PDF渲染 / pywebview）
 pyobjc>=10.0; sys_platform == "darwin"
 
-# Windows：需另外安装 Tesseract-OCR(含中文包) 与 poppler，并加入 PATH
-#   打包后两者已内包，最终用户无需安装
+# Windows：仅 Tesseract 需内包(OCR)，PDF 用 PyMuPDF(纯pip)无需外部依赖

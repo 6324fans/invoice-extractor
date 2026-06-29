@@ -432,8 +432,31 @@ def _render_pdf_quartz(path, workdir, safe, max_pages=4):
     return imgs
 
 
+def _render_pdf_pymupdf(path, workdir, safe, max_pages=4):
+    """用 PyMuPDF(fitz) 渲染 PDF（pip 装，无外部依赖，Windows 友好）。"""
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        return []
+    try:
+        doc = fitz.open(path)
+    except Exception:
+        return []
+    imgs = []
+    for i in range(min(len(doc), max_pages)):
+        page = doc[i]
+        # 2x 缩放，足够 OCR
+        mat = fitz.Matrix(2, 2)
+        pix = page.get_pixmap(matrix=mat)
+        dst = os.path.join(workdir, f"pdfp_{safe}_{i+1}.png")
+        pix.save(dst)
+        imgs.append(dst)
+    doc.close()
+    return imgs
+
+
 def _render_pdf_pdftoppm(path, workdir, safe, max_pages=4):
-    """用 poppler pdftoppm 渲染 PDF（Windows 或 Mac 兜底）。"""
+    """用 poppler pdftoppm 渲染 PDF（兜底）。"""
     pdftoppm = _find_tool("pdftoppm")
     if not pdftoppm:
         return []
@@ -451,42 +474,63 @@ def _render_pdf_pdftoppm(path, workdir, safe, max_pages=4):
 
 
 def _extract_pdf(path, workdir):
-    """PDF 解析：电子发票(有文字层)优先 pdftotext；扫描件渲染多页再 OCR。
+    """PDF 解析：电子发票(有文字层)优先提文字；扫描件渲染多页再 OCR。
 
-    Mac 用 Quartz 渲染（无需外部依赖）；Windows/其他用 pdftoppm(poppler)。
+    Mac: Quartz 渲染 + pdftotext(若有) 文字层
+    Windows/其他: PyMuPDF 渲染 + 文字层（无需 poppler），pdftoppm 兜底
     """
     safe = _safe_name(os.path.basename(path))
     out = []
     text_marker = None
 
-    # 1. 文字层（电子发票 PDF 质量最高，无需 OCR）
-    pdftotext = _find_tool("pdftotext")
-    if pdftotext:
+    # 1. 文字层：优先 PyMuPDF（跨平台无依赖），否则 pdftotext
+    text = _pdf_text_pymupdf(path)
+    if not text:
+        text = _pdf_text_pdftotext(path)
+    if text and len(text) > 20:
         txt_dst = os.path.join(workdir, safe + ".txt")
-        try:
-            subprocess.run([pdftotext, "-layout", path, txt_dst],
-                           capture_output=True, timeout=30)
-            if os.path.exists(txt_dst):
-                txt = open(txt_dst, "r", errors="ignore").read().strip()
-                if len(txt) > 20:
-                    text_marker = txt_dst + ".pdftext"
-                    open(text_marker, "w", encoding="utf-8").write(txt)
-        except Exception:
-            pass
+        text_marker = txt_dst + ".pdftext"
+        open(text_marker, "w", encoding="utf-8").write(text)
 
-    # 2. 渲染页面为 png：Mac 优先 Quartz，否则 pdftoppm
+    # 2. 渲染页面为 png
     if IS_MAC:
         page_imgs = _render_pdf_quartz(path, workdir, safe)
-        if not page_imgs:  # Quartz 失败则兜底用 pdftoppm
-            page_imgs = _render_pdf_pdftoppm(path, workdir, safe)
+        if not page_imgs:
+            page_imgs = _render_pdf_pymupdf(path, workdir, safe)
     else:
-        page_imgs = _render_pdf_pdftoppm(path, workdir, safe)
+        page_imgs = _render_pdf_pymupdf(path, workdir, safe)
+        if not page_imgs:
+            page_imgs = _render_pdf_pdftoppm(path, workdir, safe)
 
-    # 文字层在前（字段更准），渲染图在后（展示/兜底）
     if text_marker:
         out.append(text_marker)
     out.extend(page_imgs)
     return out
+
+
+def _pdf_text_pymupdf(path):
+    """用 PyMuPDF 提取 PDF 文字层。"""
+    try:
+        import fitz
+        doc = fitz.open(path)
+        text = "".join(doc[i].get_text() for i in range(len(doc)))
+        doc.close()
+        return text.strip()
+    except Exception:
+        return ""
+
+
+def _pdf_text_pdftotext(path):
+    """用 poppler pdftotext 提取文字层（兜底）。"""
+    pdftotext = _find_tool("pdftotext")
+    if not pdftotext:
+        return ""
+    try:
+        r = subprocess.run([pdftotext, "-layout", path, "-"],
+                           capture_output=True, timeout=30)
+        return r.stdout.decode("utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
 
 
 def _safe_name(name):

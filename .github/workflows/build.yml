@@ -17,50 +17,37 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Tesseract + Chinese + poppler (system, for bundling)
+      - name: Install Tesseract + Chinese (system, for bundling OCR)
         shell: pwsh
         run: |
           choco install tesseract -y
-          choco install poppler -y
-
-          # 下载中文语言包
           $tessdir = "C:\Program Files\Tesseract-OCR"
           $td = "$tessdir\tessdata"
           Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata" -OutFile "$td\chi_sim.traineddata"
           Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_tra.traineddata" -OutFile "$td\chi_tra.traineddata"
 
-      - name: Stage bundled bin (Tesseract + poppler) for PyInstaller
+      - name: Stage bundled Tesseract for PyInstaller
         shell: pwsh
         run: |
           $stage = "bundle_bin"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          # Tesseract 主程序 + dll + tessdata
           $tessdir = "C:\Program Files\Tesseract-OCR"
+          # Tesseract 主程序 + 运行所需 dll
           Copy-Item "$tessdir\tesseract.exe" $stage\
-          # Tesseract 运行所需 dll
-          Get-ChildItem "$tessdir\*.dll" | Copy-Item -Destination $stage\
-          # 中文语言包放到 bin 旁的 tessdata（代码按此查找）
+          Get-ChildItem "$tessdir\*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination $stage\
+          # 中文语言包（放 bin 旁的 tessdata，代码按此查找）
           New-Item -ItemType Directory -Force -Path "bundle_tessdata" | Out-Null
           Copy-Item "$tessdir\tessdata\chi_sim.traineddata" "bundle_tessdata\"
           Copy-Item "$tessdir\tessdata\chi_tra.traineddata" "bundle_tessdata\"
           Copy-Item "$tessdir\tessdata\eng.traineddata" "bundle_tessdata\" -ErrorAction SilentlyContinue
-          # poppler 的 pdftotext / pdftoppm（choco 装在 PATH 里）
-          $pdt = (Get-Command pdftotext).Source
-          $ppm = (Get-Command pdftoppm).Source
-          Copy-Item $pdt $stage\
-          Copy-Item $ppm $stage\
-          # poppler 依赖的 dll 同目录拷贝
-          $popdir = Split-Path $pdt -Parent
-          Get-ChildItem "$popdir\*.dll" | Copy-Item -Destination $stage\
-          Write-Host "Bundled bin contents:"
-          Get-ChildItem $stage | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host "Bundled Tesseract:"; Get-ChildItem $stage | ForEach-Object { Write-Host "  $($_.Name)" }
 
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Build exe (bundle tools inside)
+      - name: Build exe (Tesseract bundled; PDF via PyMuPDF)
         shell: pwsh
         run: |
           pyinstaller --noconfirm --windowed --name invoice-extractor `
@@ -68,20 +55,16 @@ jobs:
             --add-data "static;static" `
             --add-data "bundle_bin;bin" `
             --add-data "bundle_tessdata;tessdata" `
+            --collect-all fitz `
             --hidden-import webview.platforms.edgechromium `
             --hidden-import pytesseract `
             main.py
 
-      - name: Verify bundled tools in dist
+      - name: Verify bundled Tesseract in dist
         shell: pwsh
         run: |
-          Write-Host "dist/invoice-extractor contents (bin):"
-          if (Test-Path "dist\invoice-extractor\bin") {
-            Get-ChildItem "dist\invoice-extractor\bin" | ForEach-Object { Write-Host "  $($_.Name)" }
-          } else { Write-Host "  bin/ 缺失!" }
-          if (Test-Path "dist\invoice-extractor\tessdata") {
-            Write-Host "tessdata:"; Get-ChildItem "dist\invoice-extractor\tessdata" | ForEach-Object { Write-Host "  $($_.Name)" }
-          }
+          Write-Host "bin/:"; Get-ChildItem "dist\invoice-extractor\bin" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host "tessdata/:"; Get-ChildItem "dist\invoice-extractor\tessdata" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
 
       - name: Upload exe artifact
         uses: actions/upload-artifact@v4
