@@ -10,3 +10,8 @@ PyMuPDF>=1.24
 pyobjc>=10.0; sys_platform == "darwin"
 
 # Windows：仅 Tesseract 需内包(OCR)，PDF 用 PyMuPDF(纯pip)无需外部依赖
+# 注：pywebview 的 Windows 后端依赖 pythonnet，但无需在此显式声明——
+# pythonnet/clr_loader 是 pywebview 在 win32 上的传递依赖，会自动装上。
+# 打包时必须在 PyInstaller 命令加 --collect-all pythonnet --collect-all clr_loader
+# （见 build.yml / build_win.ps1），否则冻结后 webview.start() 会报
+# "Failed to resolve Python.Runtime.Loader.Initialize"，窗口打不开。

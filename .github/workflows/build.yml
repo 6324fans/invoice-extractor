@@ -56,6 +56,9 @@ jobs:
             --add-data "bundle_bin;bin" `
             --add-data "bundle_tessdata;tessdata" `
             --collect-all fitz `
+            --collect-all pythonnet `
+            --collect-all clr_loader `
+            --collect-all webview `
             --hidden-import webview.platforms.edgechromium `
             --hidden-import pytesseract `
             main.py
