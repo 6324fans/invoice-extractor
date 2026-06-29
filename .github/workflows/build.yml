@@ -63,8 +63,13 @@ jobs:
       - name: Verify bundled Tesseract in dist
         shell: pwsh
         run: |
-          Write-Host "bin/:"; Get-ChildItem "dist\invoice-extractor\bin" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
-          Write-Host "tessdata/:"; Get-ChildItem "dist\invoice-extractor\tessdata" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+          # PyInstaller onedir: add-data 放在 _internal/ 下
+          $base = "dist\invoice-extractor\_internal"
+          if (-not (Test-Path $base)) { $base = "dist\invoice-extractor" }
+          Write-Host "bin/:"; Get-ChildItem "$base\bin" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host "tessdata/:"; Get-ChildItem "$base\tessdata" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+          if (Test-Path "$base\bin\tesseract.exe") { Write-Host "✓ Tesseract 已内包" } else { Write-Host "✗ Tesseract 缺失"; exit 1 }
+          if (Test-Path "$base\tessdata\chi_sim.traineddata") { Write-Host "✓ 中文包已内包" } else { Write-Host "✗ 中文包缺失"; exit 1 }
 
       - name: Upload exe artifact
         uses: actions/upload-artifact@v4
