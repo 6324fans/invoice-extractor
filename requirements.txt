@@ -1,0 +1,10 @@
+# 微信发票提取 - 运行依赖
+flask>=3.0
+pywebview>=5.0
+Pillow>=10.0
+python-docx>=1.1
+pytesseract>=0.3.10
+
+# macOS 额外（pywebview 依赖 pyobjc，Mac 自动装）
+# Windows 需另外安装 Tesseract-OCR 并设置 TESSERACT_CMD 或加入 PATH
+# PDF 解析需 poppler（pdftotext/pdftoppm）：Mac 用 brew install poppler；Windows 下载 poppler 加入 PATH

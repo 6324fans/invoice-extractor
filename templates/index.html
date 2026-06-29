@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>微信发票提取</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>🧾 微信发票提取</h1>
+    <div id="status" class="status"></div>
+  </header>
+
+  <!-- 设置区 -->
+  <section class="card">
+    <h2>设置</h2>
+    <div class="row">
+      <label>微信数据路径</label>
+      <input type="text" id="wxPath" placeholder="留空自动探测；可填用户目录或根目录" style="flex:1">
+      <button onclick="saveConfig()">保存</button>
+    </div>
+    <div id="detectedInfo" class="hint"></div>
+  </section>
+
+  <!-- 扫描区 -->
+  <section class="card">
+    <h2>按日期获取发票</h2>
+    <div class="row">
+      <label>开始</label>
+      <input type="date" id="scanStart">
+      <label>结束</label>
+      <input type="date" id="scanEnd">
+      <label class="checkbox"><input type="checkbox" id="forceScan"> 强制重扫</label>
+      <button id="scanBtn" onclick="runScan()">🔍 扫描</button>
+    </div>
+    <div id="scanProgress" class="progress" style="display:none"></div>
+    <div id="scanResult" class="result"></div>
+  </section>
+
+  <!-- 筛选区 -->
+  <section class="card">
+    <h2>发票列表 <span id="listCount" class="badge"></span></h2>
+    <div class="row">
+      <label>按</label>
+      <select id="dateField">
+        <option value="wechat_time">微信接收时间</option>
+        <option value="invoice_date">发票开票日期</option>
+      </select>
+      <label>开始</label>
+      <input type="date" id="filterStart">
+      <label>结束</label>
+      <input type="date" id="filterEnd">
+      <input type="text" id="searchQ" placeholder="搜索 销售方/号码/代码" style="flex:1">
+      <button onclick="loadInvoices()">筛选</button>
+      <button onclick="clearFilter()" class="secondary">清空</button>
+    </div>
+    <div class="table-wrap">
+      <table id="invTable">
+        <thead>
+          <tr>
+            <th></th>
+            <th>发票号码</th>
+            <th>发票代码</th>
+            <th>开票日期</th>
+            <th>销售方</th>
+            <th>购买方</th>
+            <th>价税合计</th>
+            <th>微信接收时间</th>
+            <th>类型</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<!-- 详情弹窗 -->
+<div id="modal" class="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-body">
+    <button class="close" onclick="closeModal()">×</button>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

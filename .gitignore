@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 打包产物
+build/
+dist/
+*.spec
+*.spec.bak
+wechat_ocr_bin
+*.app
+*.exe
+
+# 运行时数据（不入库，含敏感发票信息）
+invoices.db
+invoices.db-shm
+invoices.db-wal
+data/
+config.json
+
+# 测试样例发票图（个人隐私，不入库）
+发票*.png
+发票*.jpeg
+发票*.jpg
+发票*.zip
+测试.docx
+JPEG.webp.zip
+*.pdftext
+*.pdf
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 临时
+wxscan_*/
+tmp/

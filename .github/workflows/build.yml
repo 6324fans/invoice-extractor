@@ -1,0 +1,91 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Tesseract
+        run: |
+          choco install tesseract -y
+          echo "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Install Tesseract Chinese language
+        run: |
+          $url = "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata"
+          Invoke-WebRequest $url -OutFile "C:\Program Files\Tesseract-OCR\tessdata\chi_sim.traineddata"
+          $url2 = "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_tra.traineddata"
+          Invoke-WebRequest $url2 -OutFile "C:\Program Files\Tesseract-OCR\tessdata\chi_tra.traineddata"
+        shell: pwsh
+
+      - name: Install poppler
+        run: choco install poppler -y
+        shell: pwsh
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build exe
+        run: |
+          pyinstaller --noconfirm --windowed --name invoice-extractor `
+            --add-data "templates;templates" `
+            --add-data "static;static" `
+            --hidden-import webview.platforms.edgechromium `
+            --hidden-import pytesseract `
+            main.py
+        shell: pwsh
+
+      - name: Upload exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: invoice-extractor-windows
+          path: dist/invoice-extractor/*
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Compile OCR binary
+        run: python -c "import ocr; ocr.ensure_ocr_binary()"
+
+      - name: Build app
+        run: |
+          pyinstaller --noconfirm --windowed \
+            --name invoice-extractor \
+            --add-data "wechat_ocr.swift:." \
+            --add-data "templates:templates" \
+            --add-data "static:static" \
+            --hidden-import webview.platforms.cocoa \
+            main.py
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: invoice-extractor-macos
+          path: dist/invoice-extractor.app
