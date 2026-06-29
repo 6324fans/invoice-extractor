@@ -5,6 +5,8 @@ Pillow>=10.0
 python-docx>=1.1
 pytesseract>=0.3.10
 
-# macOS 额外（pywebview 依赖 pyobjc，Mac 自动装）
-# Windows 需另外安装 Tesseract-OCR 并设置 TESSERACT_CMD 或加入 PATH
-# PDF 解析需 poppler（pdftotext/pdftoppm）：Mac 用 brew install poppler；Windows 下载 poppler 加入 PATH
+# macOS 系统框架绑定（Vision OCR / Quartz PDF渲染 / pywebview）
+pyobjc>=10.0; sys_platform == "darwin"
+
+# Windows：需另外安装 Tesseract-OCR(含中文包) 与 poppler，并加入 PATH
+#   打包后两者已内包，最终用户无需安装

@@ -35,6 +35,34 @@ WORD_EXT = {".docx", ".doc"}
 # 所有要搜索的发票候选格式：图片 + 压缩包 + Word + PDF
 TARGET_EXTS = PLAIN_IMG_EXT | CONVERT_EXT | ARCHIVE_EXT | WORD_EXT | {".pdf"}
 
+
+def _bundled_bin_dir():
+    """返回内包工具(poppler等)所在目录，打包后优先用程序旁的 bin/。"""
+    candidates = []
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(sys.executable)
+        candidates.append(os.path.join(exe_dir, "bin"))
+        candidates.append(os.path.join(getattr(sys, "_MEIPASS", ""), "bin"))
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin"))
+    for c in candidates:
+        if c and os.path.isdir(c):
+            return c
+    return None
+
+
+def _find_tool(name):
+    """查找外部工具：环境变量 > 内包 bin/ > PATH。Windows 自动加 .exe。"""
+    env_key = {"pdftotext": "PDFTOTEXT_CMD",
+               "pdftoppm": "PDFTOPPM_CMD"}.get(name)
+    if env_key and os.environ.get(env_key):
+        return os.environ[env_key]
+    bin_dir = _bundled_bin_dir()
+    if bin_dir:
+        cand = os.path.join(bin_dir, name + (".exe" if not IS_MAC else ""))
+        if os.path.exists(cand):
+            return cand
+    return shutil.which(name)
+
 # 路径中包含这些片段的视为无关缓存，跳过
 SKIP_SUBSTR = ["/video/", "WeAppIcon", "/Avatar/", "/Stickers/", "OpenImResource",
                "/__MACOSX/", "/.Trash/", "/Backup/", "/all_users/"]
@@ -360,18 +388,79 @@ def _extract_archive_cmd(path, workdir):
     return imgs
 
 
-def _extract_pdf(path, workdir):
-    """PDF 解析：电子发票(有文字层)优先 pdftotext；扫描件用 pdftoppm 渲染多页再 OCR。
+def _render_pdf_quartz(path, workdir, safe, max_pages=4):
+    """macOS 用 Quartz 框架渲染 PDF 页面为 png（无需外部 poppler，打包友好）。"""
+    try:
+        import Quartz
+        from Foundation import NSURL
+    except Exception:
+        return []
+    url = NSURL.fileURLWithPath_(path)
+    doc = Quartz.CGPDFDocumentCreateWithURL(url)
+    if not doc:
+        return []
+    n = min(Quartz.CGPDFDocumentGetNumberOfPages(doc), max_pages)
+    imgs = []
+    for i in range(1, n + 1):
+        page = Quartz.CGPDFDocumentGetPage(doc, i)
+        if not page:
+            continue
+        rect = Quartz.CGPDFPageGetBoxRect(page, Quartz.kCGPDFMediaBox)
+        # 2x 缩放足够清晰
+        scale = 2.0
+        w = int(rect.size.width * scale)
+        h = int(rect.size.height * scale)
+        cs = Quartz.CGColorSpaceCreateDeviceRGB()
+        ctx = Quartz.CGBitmapContextCreate(None, w, h, 8, 0, cs,
+                                           Quartz.kCGImageAlphaPremultipliedLast)
+        if not ctx:
+            continue
+        Quartz.CGContextSetRGBFillColor(ctx, 1, 1, 1, 1)
+        Quartz.CGContextFillRect(ctx, Quartz.CGRectMake(0, 0, w, h))
+        Quartz.CGContextScaleCTM(ctx, scale, scale)
+        Quartz.CGContextDrawPDFPage(ctx, page)
+        img = Quartz.CGBitmapContextCreateImage(ctx)
+        if not img:
+            continue
+        dst = os.path.join(workdir, f"pdfp_{safe}_{i}.png")
+        dest = Quartz.CGImageDestinationCreateWithURL(
+            NSURL.fileURLWithPath_(dst), "public.png", 1, None)
+        if dest:
+            Quartz.CGImageDestinationAddImage(dest, img, None)
+            if Quartz.CGImageDestinationFinalize(dest):
+                imgs.append(dst)
+    return imgs
 
-    返回列表，文字层标记(.pdftext)放最前(字段更准)，渲染的 png 跟在后(用于展示/兜底OCR)。
-    sips 无法渲染 PDF，故统一用 poppler 的 pdftoppm。
+
+def _render_pdf_pdftoppm(path, workdir, safe, max_pages=4):
+    """用 poppler pdftoppm 渲染 PDF（Windows 或 Mac 兜底）。"""
+    pdftoppm = _find_tool("pdftoppm")
+    if not pdftoppm:
+        return []
+    prefix = os.path.join(workdir, "pdfp_" + safe)
+    try:
+        subprocess.run([pdftoppm, "-png", "-r", "150", "-l", str(max_pages), path, prefix],
+                       capture_output=True, timeout=90)
+    except Exception:
+        return []
+    imgs = []
+    for fn in sorted(os.listdir(workdir)):
+        if fn.startswith("pdfp_" + safe) and fn.endswith(".png"):
+            imgs.append(os.path.join(workdir, fn))
+    return imgs
+
+
+def _extract_pdf(path, workdir):
+    """PDF 解析：电子发票(有文字层)优先 pdftotext；扫描件渲染多页再 OCR。
+
+    Mac 用 Quartz 渲染（无需外部依赖）；Windows/其他用 pdftoppm(poppler)。
     """
     safe = _safe_name(os.path.basename(path))
     out = []
     text_marker = None
 
     # 1. 文字层（电子发票 PDF 质量最高，无需 OCR）
-    pdftotext = shutil.which("pdftotext")
+    pdftotext = _find_tool("pdftotext")
     if pdftotext:
         txt_dst = os.path.join(workdir, safe + ".txt")
         try:
@@ -385,20 +474,13 @@ def _extract_pdf(path, workdir):
         except Exception:
             pass
 
-    # 2. 渲染页面为 png（扫描件 OCR 与电子发票展示都需要）
-    pdftoppm = shutil.which("pdftoppm")
-    page_imgs = []
-    if pdftoppm:
-        prefix = os.path.join(workdir, "pdfp_" + safe)
-        try:
-            # 150dpi 足够 OCR，最多渲染前 4 页（发票一般 1-2 页）
-            subprocess.run([pdftoppm, "-png", "-r", "150", "-l", "4", path, prefix],
-                           capture_output=True, timeout=90)
-        except Exception:
-            pass
-        for fn in sorted(os.listdir(workdir)):
-            if fn.startswith("pdfp_" + safe) and fn.endswith(".png"):
-                page_imgs.append(os.path.join(workdir, fn))
+    # 2. 渲染页面为 png：Mac 优先 Quartz，否则 pdftoppm
+    if IS_MAC:
+        page_imgs = _render_pdf_quartz(path, workdir, safe)
+        if not page_imgs:  # Quartz 失败则兜底用 pdftoppm
+            page_imgs = _render_pdf_pdftoppm(path, workdir, safe)
+    else:
+        page_imgs = _render_pdf_pdftoppm(path, workdir, safe)
 
     # 文字层在前（字段更准），渲染图在后（展示/兜底）
     if text_marker:

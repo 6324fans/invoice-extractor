@@ -17,38 +17,71 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Tesseract
+      - name: Install Tesseract + Chinese + poppler (system, for bundling)
+        shell: pwsh
         run: |
           choco install tesseract -y
-          echo "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
-        shell: pwsh
+          choco install poppler -y
 
-      - name: Install Tesseract Chinese language
+          # 下载中文语言包
+          $tessdir = "C:\Program Files\Tesseract-OCR"
+          $td = "$tessdir\tessdata"
+          Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata" -OutFile "$td\chi_sim.traineddata"
+          Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_tra.traineddata" -OutFile "$td\chi_tra.traineddata"
+
+      - name: Stage bundled bin (Tesseract + poppler) for PyInstaller
+        shell: pwsh
         run: |
-          $url = "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata"
-          Invoke-WebRequest $url -OutFile "C:\Program Files\Tesseract-OCR\tessdata\chi_sim.traineddata"
-          $url2 = "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_tra.traineddata"
-          Invoke-WebRequest $url2 -OutFile "C:\Program Files\Tesseract-OCR\tessdata\chi_tra.traineddata"
-        shell: pwsh
-
-      - name: Install poppler
-        run: choco install poppler -y
-        shell: pwsh
+          $stage = "bundle_bin"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          # Tesseract 主程序 + dll + tessdata
+          $tessdir = "C:\Program Files\Tesseract-OCR"
+          Copy-Item "$tessdir\tesseract.exe" $stage\
+          # Tesseract 运行所需 dll
+          Get-ChildItem "$tessdir\*.dll" | Copy-Item -Destination $stage\
+          # 中文语言包放到 bin 旁的 tessdata（代码按此查找）
+          New-Item -ItemType Directory -Force -Path "bundle_tessdata" | Out-Null
+          Copy-Item "$tessdir\tessdata\chi_sim.traineddata" "bundle_tessdata\"
+          Copy-Item "$tessdir\tessdata\chi_tra.traineddata" "bundle_tessdata\"
+          Copy-Item "$tessdir\tessdata\eng.traineddata" "bundle_tessdata\" -ErrorAction SilentlyContinue
+          # poppler 的 pdftotext / pdftoppm（choco 装在 PATH 里）
+          $pdt = (Get-Command pdftotext).Source
+          $ppm = (Get-Command pdftoppm).Source
+          Copy-Item $pdt $stage\
+          Copy-Item $ppm $stage\
+          # poppler 依赖的 dll 同目录拷贝
+          $popdir = Split-Path $pdt -Parent
+          Get-ChildItem "$popdir\*.dll" | Copy-Item -Destination $stage\
+          Write-Host "Bundled bin contents:"
+          Get-ChildItem $stage | ForEach-Object { Write-Host "  $($_.Name)" }
 
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Build exe
+      - name: Build exe (bundle tools inside)
+        shell: pwsh
         run: |
           pyinstaller --noconfirm --windowed --name invoice-extractor `
             --add-data "templates;templates" `
             --add-data "static;static" `
+            --add-data "bundle_bin;bin" `
+            --add-data "bundle_tessdata;tessdata" `
             --hidden-import webview.platforms.edgechromium `
             --hidden-import pytesseract `
             main.py
+
+      - name: Verify bundled tools in dist
         shell: pwsh
+        run: |
+          Write-Host "dist/invoice-extractor contents (bin):"
+          if (Test-Path "dist\invoice-extractor\bin") {
+            Get-ChildItem "dist\invoice-extractor\bin" | ForEach-Object { Write-Host "  $($_.Name)" }
+          } else { Write-Host "  bin/ 缺失!" }
+          if (Test-Path "dist\invoice-extractor\tessdata") {
+            Write-Host "tessdata:"; Get-ChildItem "dist\invoice-extractor\tessdata" | ForEach-Object { Write-Host "  $($_.Name)" }
+          }
 
       - name: Upload exe artifact
         uses: actions/upload-artifact@v4
@@ -74,7 +107,7 @@ jobs:
       - name: Compile OCR binary
         run: python -c "import ocr; ocr.ensure_ocr_binary()"
 
-      - name: Build app
+      - name: Build app (Quartz PDF + Vision OCR, no external deps)
         run: |
           pyinstaller --noconfirm --windowed \
             --name invoice-extractor \
@@ -82,6 +115,9 @@ jobs:
             --add-data "templates:templates" \
             --add-data "static:static" \
             --hidden-import webview.platforms.cocoa \
+            --hidden-import Quartz \
+            --hidden-import Vision \
+            --hidden-import AppKit \
             main.py
 
       - name: Upload app artifact

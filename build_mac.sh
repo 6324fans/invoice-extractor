@@ -1,5 +1,6 @@
 #!/bin/bash
 # Mac App 打包脚本
+# Mac 用系统 Vision(OCR)+Quartz(PDF渲染)+sips/textutil，无需内包任何外部工具
 # 用法: bash build_mac.sh
 set -e
 cd "$(dirname "$0")"
@@ -13,8 +14,10 @@ pyinstaller --noconfirm --windowed \
   --add-data "wechat_ocr.swift:." \
   --add-data "templates:templates" \
   --add-data "static:static" \
-  --hidden-import "webview.platforms.edgechromium" \
   --hidden-import "webview.platforms.cocoa" \
+  --hidden-import "Quartz" \
+  --hidden-import "Vision" \
+  --hidden-import "AppKit" \
   main.py
 
 echo ""

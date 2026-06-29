@@ -12,6 +12,26 @@ IS_MAC = sys.platform == "darwin"
 # 资源目录：打包后用 _MEIPASS，否则用源码目录
 _RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 SWIFT_SRC = os.path.join(_RES_DIR, "wechat_ocr.swift")
+
+
+def _bundled_bin_dir():
+    """返回内包工具(tesseract/poppler)所在目录，打包后优先用程序旁的 bin/。
+
+    查找顺序：环境变量 > 可执行文件旁 bin/ > _MEIPASS/bin > PATH
+    """
+    candidates = []
+    if getattr(sys, "frozen", False):
+        # 可执行文件旁的 bin/（PyInstaller onedir 模式）
+        exe_dir = os.path.dirname(sys.executable)
+        candidates.append(os.path.join(exe_dir, "bin"))
+        candidates.append(os.path.join(_RES_DIR, "bin"))
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin"))
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    return None
+
+
 # OCR_BIN 是编译产物，需可写：打包后放用户目录
 def _ocr_bin_path():
     if getattr(sys, "frozen", False):
@@ -21,8 +41,25 @@ def _ocr_bin_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "wechat_ocr_bin")
 OCR_BIN = _ocr_bin_path()
 
-# Tesseract 可执行路径（Windows 需指定安装位置；打包时随附）
-TESSERACT_CMD = os.environ.get("TESSERACT_CMD") or shutil.which("tesseract")
+
+def _find_tool(name):
+    """查找外部工具：环境变量 > 内包 bin/ > PATH。Windows 自动加 .exe。"""
+    env_key = {"tesseract": "TESSERACT_CMD",
+               "pdftotext": "PDFTOTEXT_CMD",
+               "pdftoppm": "PDFTOPPM_CMD"}.get(name)
+    if env_key and os.environ.get(env_key):
+        return os.environ[env_key]
+    bin_dir = _bundled_bin_dir()
+    if bin_dir:
+        cand = os.path.join(bin_dir, name + (".exe" if not IS_MAC else ""))
+        if os.path.exists(cand):
+            return cand
+    found = shutil.which(name)
+    return found
+
+
+# Tesseract 可执行路径（Windows 内包或 PATH）
+TESSERACT_CMD = _find_tool("tesseract")
 
 # 命中其一即判定为发票
 INVOICE_KEYWORDS = [
@@ -64,6 +101,21 @@ def ocr_available():
     return TESSERACT_CMD is not None
 
 
+def _setup_tessdata():
+    """设置 TESSDATA_PREFIX 指向内包的 tessdata 目录（含中文语言包）。"""
+    if os.environ.get("TESSDATA_PREFIX"):
+        return
+    bin_dir = _bundled_bin_dir()
+    if not bin_dir:
+        return
+    # tessdata 在 bin 旁或 bin 内
+    for cand in (os.path.join(os.path.dirname(bin_dir), "tessdata"),
+                 os.path.join(bin_dir, "tessdata")):
+        if os.path.isdir(cand):
+            os.environ["TESSDATA_PREFIX"] = os.path.dirname(cand)
+            return
+
+
 def _ocr_with_tesseract(paths, timeout=60):
     """Windows/其他：用 Tesseract 识别，返回 {path: text}。"""
     try:
@@ -71,6 +123,10 @@ def _ocr_with_tesseract(paths, timeout=60):
         from PIL import Image
     except Exception:
         return {p: "__OCR_UNAVAILABLE__" for p in paths}
+    if TESSERACT_CMD:
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+    # 设置 tessdata 目录（内包时指向 bin 旁的 tessdata）
+    _setup_tessdata()
     results = {}
     for p in paths:
         try:

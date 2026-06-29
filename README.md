@@ -18,10 +18,11 @@ python3 main.py          # 桌面窗口
 ```
 
 ## 系统依赖
-- **macOS**：自带 Vision/sips/textutil；PDF 需 `brew install poppler`
-- **Windows**：需安装
-  - Tesseract-OCR（含中文语言包 chi_sim/chi_tra）→ 设置 `TESSERACT_CMD` 或加入 PATH
-  - poppler（pdftotext/pdftoppm）→ 加入 PATH
+**已全部内包，用户免安装：**
+- **macOS**：用系统 Vision(OCR) + Quartz(PDF渲染) + sips/textutil，无需任何外部工具，app 开箱即用
+- **Windows**：Tesseract-OCR(含中文包 chi_sim/chi_tra) 与 poppler(pdftotext/pdftoppm 及其 dll) 均打进 exe，开箱即用
+
+> 开发模式(跑源码)下：Mac 需 `pip install pyobjc`；Windows 需装 Tesseract+poppler。
 
 ## 打包
 
