@@ -32,11 +32,16 @@ bash build_mac.sh
 # 产出 dist/发票提取.app
 ```
 
-### Windows exe（CI 自动构建）
-推送到 GitHub 后，Actions 在 windows-latest 上自动构建 `.exe`，
-从仓库 **Actions → 对应运行 → Artifacts** 下载 `invoice-extractor-windows`。
+## 下载安装包（开箱即用）
 
-也可手动触发：Actions 页面 → Run workflow。
+前往 [Releases 页面](https://github.com/6324fans/invoice-extractor/releases) 下载对应平台的压缩包，解压后直接运行：
+
+- **Windows**：`invoice-extractor-windows.zip` → 解压 → 运行 `invoice-extractor.exe`
+- **macOS**：`invoice-extractor-mac.zip` → 解压得 `invoice-extractor.app` → 双击运行
+  （首次打开若提示"无法验证开发者"，右键 → 打开）
+
+> 打 tag `v*`（如 `v1.0.0`）会触发 GitHub Actions 自动构建并发布 Release。
+> 也可在 Actions 页面手动 Run workflow（产物在对应运行的 Artifacts 里）。
 
 ## 数据位置
 打包运行后，数据库与图片存于：
