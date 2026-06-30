@@ -58,11 +58,11 @@ def api_config():
 
 @app.route("/api/status")
 def api_status():
-    bin_ok = ocrmod.ensure_ocr_binary() is not None
+    ocr_ready = ocrmod.ocr_available()  # 跨平台：mac 看 Vision 二进制，Win 看 Tesseract
     cfg = load_config()
     custom = (cfg.get("wx_path") or "").strip()
     search_base = custom if (custom and os.path.isdir(custom)) else extractors.DEFAULT_WX_ROOT
-    return jsonify({"ocr_ready": bin_ok, "search_base": search_base,
+    return jsonify({"ocr_ready": ocr_ready, "search_base": search_base,
                     "exists": os.path.isdir(search_base)})
 
 
