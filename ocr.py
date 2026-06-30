@@ -98,22 +98,41 @@ def ocr_available():
     """当前平台 OCR 是否可用。"""
     if IS_MAC:
         return ensure_ocr_binary() is not None
-    return TESSERACT_CMD is not None
+    if not TESSERACT_CMD:
+        return False
+    # 内包模式：tesseract.exe 存在还不够，必须能加载中文语言包才算就绪，
+    # 否则会出现"OCR 就绪"却每张图都识别失败的假象。
+    td = os.environ.get("TESSDATA_PREFIX") or _tessdata_dir()
+    if td:
+        return os.path.exists(os.path.join(td, "chi_sim.traineddata"))
+    # 系统 tesseract（开发模式未内包）：信任其自带 tessdata
+    return True
 
 
-def _setup_tessdata():
-    """设置 TESSDATA_PREFIX 指向内包的 tessdata 目录（含中文语言包）。"""
-    if os.environ.get("TESSDATA_PREFIX"):
-        return
+def _tessdata_dir():
+    """返回内包 tessdata 目录（含 *.traineddata 的目录本身），找不到返回 None。"""
     bin_dir = _bundled_bin_dir()
     if not bin_dir:
-        return
+        return None
     # tessdata 在 bin 旁或 bin 内
     for cand in (os.path.join(os.path.dirname(bin_dir), "tessdata"),
                  os.path.join(bin_dir, "tessdata")):
         if os.path.isdir(cand):
-            os.environ["TESSDATA_PREFIX"] = os.path.dirname(cand)
-            return
+            return cand
+    return None
+
+
+def _setup_tessdata():
+    """设置 TESSDATA_PREFIX 指向内包的 tessdata 目录（含中文语言包）。
+
+    必须指向 tessdata 目录本身（即含 *.traineddata 的目录），而非其父目录——
+    否则 Windows 版 tesseract 找不到语言包，OCR 会全部静默失败（返回空文本）。
+    """
+    if os.environ.get("TESSDATA_PREFIX"):
+        return
+    td = _tessdata_dir()
+    if td:
+        os.environ["TESSDATA_PREFIX"] = td
 
 
 def _ocr_with_tesseract(paths, timeout=60):
@@ -257,7 +276,11 @@ def _detect_type(norm):
 
 
 def extract_fields(text):
-    """从 OCR 文本中提取发票字段。返回 dict，可能部分为 None。"""
+    """从 OCR 文本中提取发票字段。返回 dict，可能部分为 None。
+
+    对 OCR 常见的标签模糊/格式漂移做容错：日期、校验码、金额、购销方在
+    标签匹配失败时启用全文兜底或版面结构启发式，尽量把已识别出的信息取出来。
+    """
     if not text:
         return None
     f = {}
@@ -267,20 +290,25 @@ def extract_fields(text):
 
     # 发票代码 / 号码（OCR 可能误识"发票"为"发樑/发柔/发樂"等，做容错）
     f["invoice_code"] = _norm_digits(
-        _search(r"发[票樑柔樂]代码[:：]?([0-9OoIlSsB]{8,})", norm)
+        _search(r"发[票樑柔樂]?代[码碼]?[:：]?([0-9OoIlSsB]{8,})", norm)
     )
     f["invoice_no"] = _norm_digits(
-        _search(r"发[票樑柔樂]号[码碼]?[:：]?([0-9OoIlSsB]{6,})", norm)
+        _search(r"发[票樑柔樂]?号[码碼]?[:：]?([0-9OoIlSsB]{6,})", norm)
     )
 
-    # 开票日期
-    f["invoice_date"] = _search(
-        r"开[票栗]?日期[:：]?([0-9]{4}年[0-9]{1,2}月[0-9]{1,2}日)", norm
-    )
-    f["invoice_date_iso"] = _date_to_iso(f["invoice_date"])
+    # 开票日期：标签+年月日 → 全文任意年月日 → 标签在但月/日被识丢
+    d = _search(r"开[票栗]?日期[:：]?([0-9]{4}年[0-9]{1,2}月[0-9]{1,2}日)", norm)
+    if not d:
+        d = _search(r"([0-9]{4}年[0-9]{1,2}月[0-9]{1,2}日)", norm)
+    if not d:
+        m = re.search(r"开[票栗]?日期[:：]?\s*(\d{4})\D{0,2}(\d{1,2})\D{0,3}(\d{1,2})", text)
+        if m:
+            d = f"{m.group(1)}年{int(m.group(2))}月{int(m.group(3))}日"
+    f["invoice_date"] = d
+    f["invoice_date_iso"] = _date_to_iso(d)
 
-    # 校验码
-    cm = _search(r"校[验税]码[:：]?([0-9 ]{10,})", text)
+    # 校验码：要求多组数字由空格分隔（常4组5位），避免误匹配"代码:""号码:"
+    cm = _search(r"[码碼][:：]\s*((?:[0-9]+ +){1,}[0-9]+)", text)
     f["check_code"] = re.sub(r"\s+", " ", cm).strip() if cm else None
 
     # 机器编号
@@ -288,68 +316,95 @@ def extract_fields(text):
         _search(r"机器编号[:：]?([0-9OoIlSsB]{8,})", norm)
     )
 
-    # 价税合计（小写金额）：优先 (小写)¥xx，再 价税合计 后 ¥/￥，再 (写)¥xx
-    amt = _search(r"[（(]小写[^0-9]{0,4}[¥￥]([0-9]+\.[0-9]{1,2})", norm)
-    if not amt:
-        amt = _search(r"价税合计.{0,40}?[¥￥]([0-9]+\.[0-9]{1,2})", norm)
-    if not amt:
-        amt = _search(r"[（(]写[)）][：:]?[¥￥]([0-9]+\.[0-9]{1,2})", norm)
-    f["total_amount"] = amt
+    # 金额：收集所有 ¥xx.xx，按"一个≈另两个之和"识别价税合计/金额/税额
+    vals = [float(m.group(1)) for m in re.finditer(r"[¥￥]([0-9]+\.[0-9]{1,2})", norm)]
+    f["amount"], f["tax_amount"], f["total_amount"] = _extract_amounts(vals)
 
-    # 金额合计 + 税额合计：
-    # 发票金额区有三个¥数字（按出现顺序）：金额合计(不含税)、价税合计(带"小写")、税额合计。
-    # 以价税合计为锚，取其前一个¥数字=金额合计，后一个¥数字=税额合计。
-    f["amount"], f["tax_amount"] = _extract_amounts(norm, f.get("total_amount"))
-    # 兜底：若未取到金额合计，但有价税合计和税额，则 金额=价税合计-税额
-    if not f["amount"] and f["total_amount"] and f["tax_amount"]:
-        try:
-            f["amount"] = f"{float(f['total_amount']) - float(f['tax_amount']):.2f}"
-        except ValueError:
-            pass
-
-    # 购买方 / 销售方名称：按"价税合计"分块，前块取购买方，后块取销售方
-    f["buyer"], f["seller"] = _extract_parties(text, norm)
+    # 购买方 / 销售方
+    f["buyer"], f["seller"] = _extract_parties(text)
     return f
 
 
-def _extract_amounts(norm, total_amount):
-    """提取金额合计与税额合计。
+def _extract_amounts(vals):
+    """vals: 所有 ¥ 金额（浮点，按出现顺序）。返回 (金额合计, 税额, 价税合计)。
 
-    以价税合计数字为锚：其前最近的¥数字=金额合计(不含税)，其后最近的¥数字=税额合计。
-    用去空白文本 norm 定位，避免换行干扰。
+    规则：若存在一个值≈另两个之和 → 那个是价税合计，另两个按大小分金额/税额；
+    只有 2 个 → 大者=金额合计，小者=税额，价税=二者和；
+    1 个 → 视为价税合计；3+ 但无和关系 → 取最后两个为金额/税额（合计行常在末尾）。
     """
-    all_nums = list(re.finditer(r"[¥￥]([0-9]+\.[0-9]{1,2})", norm))
-    if not all_nums or not total_amount:
-        return None, None
-    # 找价税合计对应的匹配（值相等）
-    anchor = None
-    for m in all_nums:
-        if m.group(1) == total_amount:
-            anchor = m
+    if not vals:
+        return None, None, None
+    if len(vals) >= 3:
+        for i in range(len(vals)):
+            for j in range(len(vals)):
+                if i == j:
+                    continue
+                s = round(vals[i] + vals[j], 2)
+                for k in range(len(vals)):
+                    if k != i and k != j and abs(vals[k] - s) < 0.01:
+                        amt, tax = (vals[i], vals[j]) if vals[i] >= vals[j] else (vals[j], vals[i])
+                        return f"{amt:.2f}", f"{tax:.2f}", f"{vals[k]:.2f}"
+        # 无 a+b=c 关系：合计行通常在末尾，取最后两个
+        a, b = vals[-2], vals[-1]
+        amt, tax = (a, b) if a >= b else (b, a)
+        return f"{amt:.2f}", f"{tax:.2f}", f"{amt + tax:.2f}"
+    if len(vals) == 2:
+        amt, tax = (vals[0], vals[1]) if vals[0] >= vals[1] else (vals[1], vals[0])
+        return f"{amt:.2f}", f"{tax:.2f}", f"{amt + tax:.2f}"
+    return None, None, f"{vals[0]:.2f}"
+
+
+def _extract_parties(text):
+    """购买方 / 销售方。
+
+    销售方：取"合计行"与"收款人行"之间的首个公司名（发票右下角销售方栏）；
+    购买方：货物表头之前的首个公司名，否则取"名称:"后的个人名。
+    即便"价税合计"等分隔关键字被 OCR 识错，也能按版面结构定位。
+    """
+    lines = text.splitlines()
+    he_idx = -1
+    for i, ln in enumerate(lines):
+        if "合" in ln and ("¥" in ln or "￥" in ln):
+            he_idx = i
             break
-    if not anchor:
-        # 价税合计通常是这些数字里最大的
-        anchor = max(all_nums, key=lambda m: float(m.group(1)))
-    amount, tax = None, None
-    # 前一个 = 金额合计
-    before = [m for m in all_nums if m.start() < anchor.start()]
-    if before:
-        amount = before[-1].group(1)
-    # 后一个 = 税额合计
-    after = [m for m in all_nums if m.start() > anchor.start()]
-    if after:
-        tax = after[0].group(1)
-    return amount, tax
+    if he_idx < 0:
+        for i, ln in enumerate(lines):
+            if "¥" in ln or "￥" in ln:
+                he_idx = i
+                break
+    shou_idx = -1
+    for i, ln in enumerate(lines):
+        if "收款人" in ln:
+            shou_idx = i
+            break
+    lo = he_idx + 1 if he_idx >= 0 else len(lines) // 2
+    hi = shou_idx if shou_idx > lo else len(lines)
+    seller = None
+    for ln in lines[lo:hi]:
+        m = COMPANY_RE.search(ln)
+        if m:
+            seller = m.group(1).strip()
+            break
+    if not seller:
+        m = re.search(r"[销銷]售方", text)
+        if m:
+            hits = list(COMPANY_RE.finditer(text[:m.start()]))
+            if hits:
+                seller = hits[-1].group(1).strip()
 
-
-def _extract_parties(text, norm):
-    """购买方在'价税合计'之前，销售方在其之后。各自取首个公司名/人名。"""
-    idx = text.find("价税合计")
-    first_half = text if idx < 0 else text[:idx]
-    second_half = "" if idx < 0 else text[idx:]
-
-    buyer = _first_company(first_half) or _first_person(first_half)
-    seller = _first_company(second_half)
+    # 购买方：货物表头之前的首个公司名，否则个人名
+    head_idx = len(text)
+    for kw in ("货物或应税", "规格型号", "规格型號", "單位", "数量", "金 額", "金额"):
+        idx = text.find(kw)
+        if 0 <= idx < head_idx:
+            head_idx = idx
+    head = text[:head_idx] if head_idx < len(text) else text
+    buyer = None
+    m = COMPANY_RE.search(head)
+    if m:
+        buyer = m.group(1).strip()
+    if not buyer:
+        buyer = _first_person(head)
     return buyer, seller
 
 
@@ -359,10 +414,10 @@ def _first_company(text):
 
 
 def _first_person(text):
-    """购买方为个人时，取'名称：'后 2~5 字汉字。"""
+    """购买方为个人时，取'名称：'后 2~5 字汉字；容忍'名称'被识成'名    Hp:'等。"""
     m = re.search(r"名\s*称\s*[：:]\s*([一-龥]{2,5})(?![一-龥])", text)
     if m:
         return m.group(1)
-    # 容忍"名称"被拆成"名X："
-    m = re.search(r"名[一-龥]?\s*[：:]\s*([一-龥]{2,5})(?![一-龥])", text)
+    # 容忍"名"与冒号之间混入少量其它字符（OCR 把"名称"识成"名 Hp"等）
+    m = re.search(r"名[^\n:：]{0,8}[:：]\s*([一-龥]{2,5})(?![一-龥])", text)
     return m.group(1) if m else None
